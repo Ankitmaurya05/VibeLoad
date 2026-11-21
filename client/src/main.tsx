@@ -25,6 +25,7 @@ function App() {
   const [showFaq, setShowFaq] = useState<number | null>(0);
   const [downloadState, setDownloadState] = useState('');
   const [fallbackHref, setFallbackHref] = useState('');
+  const [foundMedia, setFoundMedia] = useState<Array<{url:string;label:string;type:string}>>([]);
 
   const statusText = useMemo(() => {
     if (!result) return '';
@@ -34,37 +35,35 @@ function App() {
   }, [result]);
 
   function checkLink(value = input) {
-    setError(''); setResult(null); setDownloadState(''); setFallbackHref('');
-    try { setResult(classifyLink(value)); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Please check the link and try again.'); }
+    setError(''); setResult(null); setDownloadState(''); setFallbackHref(''); setFoundMedia([]);
+    try {
+      const classified = classifyLink(value);
+      setResult(classified);
+      setChecking(true);
+      fetch('/api/inspect', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:classified.url.href})})
+        .then(async response => {
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Source inspection failed.');
+          setFoundMedia(data.items || []);
+          setDownloadState(data.message || '');
+        })
+        .catch(e => setDownloadState(e instanceof Error ? e.message : 'Inspection unavailable.'))
+        .finally(() => setChecking(false));
+    } catch (e) { setError(e instanceof Error ? e.message : 'Please check the link and try again.'); }
   }
 
-  async function downloadDirect() {
-    if (!result || result.kind !== 'direct-media') return;
-    setChecking(true); setDownloadState('');
-    try {
-      // Fetch is attempted only in the visitor's browser. If the host permits CORS, create a local download.
-      // If it does not, fall back to the original URL; the source controls whether it serves a download.
-      const response = await fetch(result.url.href, { method: 'GET', mode: 'cors' });
-      if (!response.ok) throw new Error(`The source returned HTTP ${response.status}.`);
-      const type = response.headers.get('content-type') || '';
-      if (type.includes('text/html')) throw new Error('The source returned a webpage, not a media file.');
-      const declaredSize = Number(response.headers.get('content-length') || 0);
-      if (declaredSize > 200 * 1024 * 1024) throw new Error('This browser download is limited to 200 MB. Use the source website for larger files.');
-      const blob = await response.blob();
-      if (!blob.size) throw new Error('The source returned an empty file.');
-      if (blob.size > 200 * 1024 * 1024) throw new Error('This browser download is limited to 200 MB. Use the source website for larger files.');
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = objectUrl; a.download = safeFilename(result.url, result.extension);
-      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(objectUrl);
-      setDownloadState('Download started. The file was served directly by the source.');
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'The source blocked browser access.';
-      if (message.includes('Failed to fetch') || message.toLowerCase().includes('cors') || message.includes('NetworkError')) {
-        setDownloadState('This host blocks browser-side file access. Open the original media URL directly; the source may preview it rather than download it.');
-        setFallbackHref(result.url.href);
-      } else { setDownloadState(message); setFallbackHref(result.url.href); }
-    } finally { setChecking(false); }
+  function downloadFile(mediaUrl: string) {
+    const a = document.createElement('a');
+    a.href = '/api/download?url=' + encodeURIComponent(mediaUrl);
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setDownloadState('Download requested. The source must allow access to the media.');
+  }
+
+  function downloadDirect() {
+    if (result?.kind === 'direct-media') downloadFile(result.url.href);
   }
 
   async function copyLink() {
@@ -82,13 +81,13 @@ function App() {
         <div className="hero-copy"><div className="eyebrow"><span className="live-dot"/> SIMPLE. QUICK. NO ACCOUNT.</div>
           <h1>Download a video<br/><span className="gradient-text">from a direct URL.</span></h1>
           <p className="hero-sub">Check a video link and save direct media files when the source allows it. No signup, no clutter, just a clear answer.</p>
-          <div className="trust-row"><span><ShieldCheck size={15}/> No account needed</span><span><LockKeyhole size={15}/> Links stay in your browser</span></div>
+          <div className="trust-row"><span><ShieldCheck size={15}/> No account needed</span><span><LockKeyhole size={15}/> No account required</span></div>
         </div>
         <div className="orb-scene" aria-hidden="true"><div className="orb-ring ring-one"/><div className="orb-ring ring-two"/><div className="orb-core"><CloudDownload size={66} strokeWidth={1.4}/></div><span className="float-chip chip-a"><FileVideo size={16}/> MP4</span><span className="float-chip chip-b"><Zap size={15}/> Fast</span><span className="float-chip chip-c"><Check size={15}/> Ready</span></div>
       </section>
 
       <section className="tool-card" aria-label="Video link checker">
-        <div className="tool-head"><div><span className="tool-kicker">THE VIBELOAD TOOL</span><h2>Paste your video link</h2><p>Direct MP4, WebM, MOV, M4V and common audio file links.</p></div><div className="tool-icon"><Link2 size={22}/></div></div>
+        <div className="tool-head"><div><span className="tool-kicker">THE VIBELOAD TOOL</span><h2>Paste your video link</h2><p>Direct media links and publicly downloadable files exposed by webpages.</p></div><div className="tool-icon"><Link2 size={22}/></div></div>
         <form className="url-form" onSubmit={e => { e.preventDefault(); checkLink(); }}>
           <div className="input-wrap"><Link2 size={19}/><input value={input} onChange={e => setInput(e.target.value)} placeholder="https://example.com/video.mp4" aria-label="Video URL"/><button type="button" className="paste-btn" onClick={async()=>{try{setInput(await navigator.clipboard.readText())}catch{setError('Clipboard access is unavailable. Paste with Ctrl+V instead.')}}}>Paste</button></div>
           <button className="check-btn" type="submit">Check link <ArrowRight size={18}/></button>
@@ -96,6 +95,8 @@ function App() {
         {error && <p className="error-msg" role="alert">{error}</p>}
         {result && <div className="result-box" aria-live="polite"><div className="result-title"><span className="result-check"><Check size={17}/></span><div><strong>{statusText}</strong><small>{result.url.hostname}</small></div></div>
           {result.kind === 'direct-media' ? <><p className="result-note">This URL looks like a direct media file. The source must still allow browser access and downloading.</p><button className="download-btn" onClick={downloadDirect} disabled={checking}>{checking ? 'Checking source…' : <><ArrowDownToLine size={18}/> Download {result.extension.toUpperCase()}</>}</button></> : result.kind === 'platform' ? <><p className="result-note">{platforms.find(p => p.name.toLowerCase().startsWith(result.platform.toLowerCase()))?.note || 'Use the platform’s own permitted download options.'}</p><a className="source-btn" href={result.url.href} target="_blank" rel="noreferrer">Open original page <ArrowRight size={16}/></a></> : <><p className="result-note">A webpage URL is different from a direct video file URL. VibeLoad does not scrape protected streams or bypass site restrictions. If you own the video, use the site’s export/download feature or paste its direct media-file URL.</p><a className="source-btn" href={result.url.href} target="_blank" rel="noreferrer">Open source page <ArrowRight size={16}/></a></>}
+          {checking && <p className="download-state">Inspecting public media…</p>}
+          {foundMedia.length > 0 && <div className="download-results"><strong>Available media files</strong>{foundMedia.map((item,i)=><button key={item.url+i} className="download-btn" onClick={()=>downloadFile(item.url)}><ArrowDownToLine size={18}/> Download {item.label}</button>)}</div>}
           {downloadState && <p className="download-state">{downloadState}</p>}
           {fallbackHref && <a className="source-btn" href={fallbackHref} target="_blank" rel="noreferrer">Open original media URL <ArrowRight size={16}/></a>}
           <button className="copy-link" onClick={copyLink}>{copied ? <Check size={14}/> : <Upload size={14}/>} {copied ? 'Copied' : 'Copy entered link'}</button>
@@ -114,7 +115,7 @@ function App() {
         ['Can VibeLoad download every video from every website?','No. A webpage link is not the same as a direct media file. Many platforms use segmented streams, signed URLs, authentication or DRM. VibeLoad only downloads direct files that the source makes accessible and does not bypass protections.'],
         ['Why does my social media link not download?','Social platforms control how their media can be accessed. Use their official save/export features or a direct file supplied by the content owner.'],
         ['Which direct file formats are supported?','VibeLoad recognizes MP4, WebM, MOV, M4V, OGV, MP3, M4A, WAV and OGG links. The actual download still depends on the server response and browser permissions.'],
-        ['Are my links stored on a server?','No. Link parsing and the download attempt happen in your browser. VibeLoad does not upload your pasted URL to an application server.'],
+        ['Are my links stored on a server?','No. URLs are sent to our Cloudflare Worker to inspect public media links and stream downloads. We do not require user accounts.'],
         ['Can I use it on mobile?','Yes. The website is responsive. When a source supports direct downloads, your mobile browser or device may ask where to save the file.']
       ].map(([q,a],i)=><article className={'faq-item '+(showFaq===i?'open':'')} key={q}><button onClick={()=>setShowFaq(showFaq===i?null:i)}><span>{q}</span><ChevronDown size={18}/></button>{showFaq===i&&<p>{a}</p>}</article>)}</div></section>
 
