@@ -25,7 +25,9 @@ function App() {
   const [showFaq, setShowFaq] = useState<number | null>(0);
   const [downloadState, setDownloadState] = useState('');
   const [fallbackHref, setFallbackHref] = useState('');
-  const [foundMedia, setFoundMedia] = useState<Array<{url:string;label:string;type:string}>>([]);
+  const [foundMedia, setFoundMedia] = useState<Array<{url:string;label:string;type:string;quality?:string}>>([]);
+  const [selectedMedia, setSelectedMedia] = useState(0);
+  const [preview, setPreview] = useState<{title?:string;thumbnail?:string;creator?:string;duration?:string}|null>(null);
 
   const statusText = useMemo(() => {
     if (!result) return '';
@@ -35,7 +37,7 @@ function App() {
   }, [result]);
 
   function checkLink(value = input) {
-    setError(''); setResult(null); setDownloadState(''); setFallbackHref(''); setFoundMedia([]);
+    setError(''); setResult(null); setDownloadState(''); setFallbackHref(''); setFoundMedia([]); setSelectedMedia(0); setPreview(null);
     try {
       const classified = classifyLink(value);
       setResult(classified);
@@ -45,6 +47,7 @@ function App() {
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || 'Source inspection failed.');
           setFoundMedia(data.items || []);
+          setPreview(data.preview || null);
           setDownloadState(data.message || '');
         })
         .catch(e => setDownloadState(e instanceof Error ? e.message : 'Inspection unavailable.'))
@@ -96,7 +99,8 @@ function App() {
         {result && <div className="result-box" aria-live="polite"><div className="result-title"><span className="result-check"><Check size={17}/></span><div><strong>{statusText}</strong><small>{result.url.hostname}</small></div></div>
           {result.kind === 'direct-media' ? <><p className="result-note">This URL looks like a direct media file. The source must still allow browser access and downloading.</p><button className="download-btn" onClick={downloadDirect} disabled={checking}>{checking ? 'Checking source…' : <><ArrowDownToLine size={18}/> Download {result.extension.toUpperCase()}</>}</button></> : result.kind === 'platform' ? <><p className="result-note">{platforms.find(p => p.name.toLowerCase().startsWith(result.platform.toLowerCase()))?.note || 'Use the platform’s own permitted download options.'}</p><p className="result-note">VibeLoad will list a download button above when the platform publicly exposes a direct media file.</p></> : <><p className="result-note">A webpage URL is different from a direct video file URL. VibeLoad does not scrape protected streams or bypass site restrictions. If you own the video, use the site’s export/download feature or paste its direct media-file URL.</p><p className="result-note">Public downloadable media found on this page will appear above.</p></>}
           {checking && <p className="download-state">Inspecting public media…</p>}
-          {foundMedia.length > 0 && <div className="download-results"><strong>Available media files</strong>{foundMedia.map((item,i)=><button key={item.url+i} className="download-btn" onClick={()=>downloadFile(item.url)}><ArrowDownToLine size={18}/> Download {item.label}</button>)}</div>}
+          {preview && <div className="video-preview" style={{marginTop:16}}>{preview.thumbnail && <img src={preview.thumbnail} alt="Video thumbnail" style={{width:'100%',maxWidth:480,borderRadius:16,aspectRatio:'16/9',objectFit:'cover'}} referrerPolicy="no-referrer"/>}<h3>{preview.title || 'Video preview'}</h3>{preview.creator && <p>Creator: {preview.creator}</p>}{preview.duration && <p>Duration: {preview.duration}</p>}</div>}
+          {foundMedia.length > 0 && <div className="download-results" style={{display:'grid',gap:12,marginTop:16}}><strong>Available video qualities ({foundMedia.length})</strong><label htmlFor="quality-select">Choose quality and format</label><select id="quality-select" value={selectedMedia} onChange={e=>setSelectedMedia(Number(e.target.value))} style={{padding:14,borderRadius:12,border:'1px solid #ccc',width:'100%',background:'var(--surface,#fff)',color:'inherit'}}>{foundMedia.map((item,i)=><option value={i} key={item.url+i}>{item.quality || item.label} — {item.type || 'media'}</option>)}</select><button className="download-btn" onClick={()=>downloadFile(foundMedia[selectedMedia].url)}><ArrowDownToLine size={18}/> Download selected video</button></div>}
           {downloadState && <p className="download-state">{downloadState}</p>}
           {fallbackHref && <a className="source-btn" href={fallbackHref} target="_blank" rel="noreferrer">Open original media URL <ArrowRight size={16}/></a>}
           <button className="copy-link" onClick={copyLink}>{copied ? <Check size={14}/> : <Upload size={14}/>} {copied ? 'Copied' : 'Copy entered link'}</button>
