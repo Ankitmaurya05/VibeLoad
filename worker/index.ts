@@ -35,8 +35,23 @@ function qualityFor(name: string): string {
 }
 
 function pageMetadata(html: string): { title?: string; thumbnail?: string; creator?: string } {
-  const meta = (key: string) => {
-    const escaped = key.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\function extractMedia(html: string, base: URL): Array<{ url: string; type: string; label: string; quality: string }> {");
+  const tags = html.match(/<meta[^>]*>/gi) || [];
+  function meta(key: string): string {
+    for (const tag of tags) {
+      const name = tag.match(/(?:property|name)\s*=\s*["']([^"']+)["']/i)?.[1]?.toLowerCase();
+      if (name !== key) continue;
+      const value = tag.match(/content\s*=\s*["']([^"']+)["']/i)?.[1];
+      if (value) return decodeHtml(value).slice(0, 500);
+    }
+    return "";
+  }
+  const title = meta("og:title") || meta("twitter:title") || decodeHtml(html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "").slice(0, 200);
+  const thumbnail = meta("og:image") || meta("twitter:image");
+  const creator = meta("author") || meta("og:site_name");
+  return { ...(title ? { title } : {}), ...(thumbnail ? { thumbnail } : {}), ...(creator ? { creator } : {}) };
+}
+
+function extractMedia(html: string, base: URL): Array<{ url: string; type: string; label: string; quality: string }> {");
     const re = new RegExp('<meta[^>]+(?:property|name)=["\\\']' + escaped + '["\\\'][^>]+content=["\\\']([^"\\\']+)["\\\']', 'i');
     const reverse = new RegExp('<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\']' + escaped + '["\\\']', 'i');
     return decodeHtml((html.match(re) || html.match(reverse) || [])[1] || "").slice(0, 300);
@@ -47,7 +62,7 @@ function pageMetadata(html: string): { title?: string; thumbnail?: string; creat
   return { ...(title ? { title } : {}), ...(thumbnail ? { thumbnail } : {}), ...(creator ? { creator } : {}) };
 }
 
-function extractMedia(html: string, base: URL): Array<{ url: string; type: string; label: string }> {
+function extractMedia(html: string, base: URL): Array<{ url: string; type: string; label: string; quality: string }> {
   const found = new Map<string, { url: string; type: string; label: string; quality: string }>();
   const patterns = [
     /<meta[^>]+(?:property|name)=["'](?:og:video(?::secure_url)?|twitter:player:stream)["'][^>]+content=["']([^"']+)["'][^>]*>/gi,
@@ -102,14 +117,13 @@ export default {
         if (!body.url || body.url.length > 4096) return json({ error: "Provide a valid URL (maximum 4,096 characters)." }, 400);
         const target = validTarget(body.url);
         const platform = platformFor(target.hostname);
-        if (platform === "YouTube") return json({ platform, items: [], message: "YouTube does not expose a general public video-download endpoint. Use YouTube's official download or creator export options." });
-        if (MEDIA_EXT.test(target.href)) return json({ platform: platform || "Direct media", items: [{ url: target.href, type: "media", label: target.pathname.split("/").pop() || "Media file", quality: qualityFor(target.pathname) }] });
+                if (MEDIA_EXT.test(target.href)) return json({ platform: platform || "Direct media", items: [{ url: target.href, type: "media", label: target.pathname.split("/").pop() || "Media file", quality: qualityFor(target.pathname) }] });
 
         const res = await fetchPublic(target);
         if (!res.ok) return json({ platform, items: [], message: `The source returned HTTP ${res.status}.` }, 422);
         const contentType = res.headers.get("content-type") || "";
         if (!contentType.includes("text/html")) {
-          if (MEDIA_TYPE.test(contentType)) return json({ platform, items: [{ url: target.href, type: contentType, label: target.pathname.split("/").pop() || "Media file" }] });
+          if (MEDIA_TYPE.test(contentType)) return json({ platform, items: [{ url: target.href, type: contentType, label: target.pathname.split("/").pop() || "Media file", quality: qualityFor(target.pathname) }] });
           return json({ platform, items: [], message: "The source did not return a supported media file or HTML page." }, 422);
         }
         const declared = Number(res.headers.get("content-length") || 0);
@@ -131,7 +145,7 @@ export default {
         const upstream = await fetchPublic(target);
         if (!upstream.ok) return json({ error: `Source returned HTTP ${upstream.status}.` }, 502);
         const type = upstream.headers.get("content-type") || "";
-        if (!MEDIA_TYPE.test(type) && !MEDIA_EXT.test(target.href)) return json({ error: "The source did not return a recognized direct media file." }, 415);
+        if (!MEDIA_TYPE.test(type)) return json({ error: "The source did not return a recognized direct media file." }, 415);
         const length = Number(upstream.headers.get("content-length") || 0);
         if (length > MAX_DOWNLOAD_BYTES) return json({ error: "Files larger than 500 MB are not supported." }, 413);
         const filename = (target.pathname.split("/").pop() || "vibeload-media").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
