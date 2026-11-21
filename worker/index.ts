@@ -29,8 +29,26 @@ function decodeHtml(s: string): string {
   return s.replace(/&amp;/g, "&").replace(/&#x2F;/gi, "/").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
+function qualityFor(name: string): string {
+  const match = name.match(/(?:^|[^0-9])(2160|1440|1080|720|480|360|240)p?(?:[^0-9]|$)/i);
+  return match ? match[1] + "p" : "Original quality";
+}
+
+function pageMetadata(html: string): { title?: string; thumbnail?: string; creator?: string } {
+  const meta = (key: string) => {
+    const escaped = key.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\function extractMedia(html: string, base: URL): Array<{ url: string; type: string; label: string; quality: string }> {");
+    const re = new RegExp('<meta[^>]+(?:property|name)=["\\\']' + escaped + '["\\\'][^>]+content=["\\\']([^"\\\']+)["\\\']', 'i');
+    const reverse = new RegExp('<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:property|name)=["\\\']' + escaped + '["\\\']', 'i');
+    return decodeHtml((html.match(re) || html.match(reverse) || [])[1] || "").slice(0, 300);
+  };
+  const title = meta("og:title") || meta("twitter:title") || decodeHtml((html.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || "").slice(0, 200);
+  const thumbnail = meta("og:image") || meta("twitter:image");
+  const creator = meta("author") || meta("og:site_name");
+  return { ...(title ? { title } : {}), ...(thumbnail ? { thumbnail } : {}), ...(creator ? { creator } : {}) };
+}
+
 function extractMedia(html: string, base: URL): Array<{ url: string; type: string; label: string }> {
-  const found = new Map<string, { url: string; type: string; label: string }>();
+  const found = new Map<string, { url: string; type: string; label: string; quality: string }>();
   const patterns = [
     /<meta[^>]+(?:property|name)=["'](?:og:video(?::secure_url)?|twitter:player:stream)["'][^>]+content=["']([^"']+)["'][^>]*>/gi,
     /<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:video(?::secure_url)?|twitter:player:stream)["'][^>]*>/gi,
@@ -42,7 +60,7 @@ function extractMedia(html: string, base: URL): Array<{ url: string; type: strin
     for (const m of html.matchAll(re)) {
       try {
         const u = validTarget(new URL(decodeHtml(m[1]), base).href);
-        if (MEDIA_EXT.test(u.href) && !found.has(u.href)) found.set(u.href, { url: u.href, type: "media", label: u.pathname.split("/").pop() || "Video file" });
+        if (MEDIA_EXT.test(u.href) && !found.has(u.href)) found.set(u.href, { url: u.href, type: "media", label: u.pathname.split("/").pop() || "Video file", quality: qualityFor(u.pathname) });
       } catch { /* ignore malformed or disallowed candidates */ }
     }
   }
@@ -85,7 +103,7 @@ export default {
         const target = validTarget(body.url);
         const platform = platformFor(target.hostname);
         if (platform === "YouTube") return json({ platform, items: [], message: "YouTube does not expose a general public video-download endpoint. Use YouTube's official download or creator export options." });
-        if (MEDIA_EXT.test(target.href)) return json({ platform: platform || "Direct media", items: [{ url: target.href, type: "media", label: target.pathname.split("/").pop() || "Media file" }] });
+        if (MEDIA_EXT.test(target.href)) return json({ platform: platform || "Direct media", items: [{ url: target.href, type: "media", label: target.pathname.split("/").pop() || "Media file", quality: qualityFor(target.pathname) }] });
 
         const res = await fetchPublic(target);
         if (!res.ok) return json({ platform, items: [], message: `The source returned HTTP ${res.status}.` }, 422);
@@ -98,7 +116,8 @@ export default {
         if (declared > MAX_PAGE_BYTES) return json({ platform, items: [], message: "The source page is too large to inspect." }, 413);
         const html = (await res.text()).slice(0, MAX_PAGE_BYTES);
         const items = extractMedia(html, target);
-        return json({ platform, items, message: items.length ? "Found publicly exposed media file link(s)." : "No direct downloadable media file was exposed by this page. Protected, segmented or login-only streams are not extracted." });
+        const preview = pageMetadata(html);
+        return json({ platform, preview, items, message: items.length ? "Found publicly exposed media file link(s)." : "No direct downloadable media file was exposed by this page. Protected, segmented or login-only streams are not extracted." });
       } catch (e) {
         return json({ error: e instanceof Error ? e.message : "Could not inspect this URL." }, 400);
       }
