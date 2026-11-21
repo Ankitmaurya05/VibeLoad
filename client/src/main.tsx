@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp, CloudDownload, FileVideo, Link2, LockKeyhole, Moon, ShieldCheck, Sun, Upload, Zap } from 'lucide-react';
-import { classifyLink, safeFilename, type LinkClassification } from './media';
+import { classifyLink, type LinkClassification } from './media';
 import './style.css';
 
 const platforms = [
